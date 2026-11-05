@@ -58,8 +58,8 @@ jobs:
                   applicationId "com.pclauncher"
                   minSdk 26
                   targetSdk 28
-                  versionCode 3
-                  versionName "1.0.3"
+                  versionCode 4
+                  versionName "1.0.4"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -87,7 +87,7 @@ jobs:
                       android:launchMode="singleTask"
                       android:resizeableActivity="true"
                       android:screenOrientation="sensorLandscape"
-                      android:configChanges="orientation|screenSize|smallestScreenSize|density|keyboardHidden">
+                      android:configChanges="orientation|screenSize|smallestScreenSize|density|fontScale|keyboard|keyboardHidden|navigation">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -125,15 +125,19 @@ jobs:
 
           class MainActivity : Activity() {
 
+              companion object {
+                  // Drží stav PC režimu i při překreslení obrazovky po změně DPI
+                  var isPcSessionActive = false
+              }
+
               private lateinit var startMenu: LinearLayout
               private lateinit var runningTasksBar: LinearLayout
+              private lateinit var statusBadge: TextView
               private val recentApps = mutableListOf<AppItem>()
-              private var isPcDpiActive = false
 
-              // Vynucení PC měřítka (jemného rozlišení) přímo pro samotný Launcher
               override fun attachBaseContext(newBase: Context) {
                   val config = Configuration(newBase.resources.configuration)
-                  config.densityDpi = 220 // Jemné PC měřítko (na mobilu malé, na TV ideální)
+                  config.densityDpi = 220
                   config.fontScale = 0.85f
                   val context = newBase.createConfigurationContext(config)
                   super.attachBaseContext(context)
@@ -143,19 +147,38 @@ jobs:
                   super.onCreate(savedInstanceState)
                   hideSystemBars()
 
+                  // 1. AUTOMATICKÉ ZAPNUTÍ PC ROZLIŠENÍ PŘI STARTU APLIKACE
+                  enablePcResolutionAutomatically()
+
                   val root = FrameLayout(this).apply {
                       setBackgroundColor(Color.parseColor("#0F172A"))
                   }
 
-                  // Levý sloupec s ovládáním rozlišení a oken
                   val desktopColumn = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dp(16), dp(16), dp(16), dp(16))
                   }
 
-                  // Tlačítko 1: Přepínač PC rozlišení (DPI)
+                  // Indikátor stavu oprávnění a rozlišení
+                  statusBadge = TextView(this).apply {
+                      textSize = 11f
+                      setTextColor(Color.WHITE)
+                      setPadding(dp(12), dp(8), dp(12), dp(8))
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#1E293B"))
+                          cornerRadius = dp(8).toFloat()
+                          setStroke(dp(1), Color.parseColor("#3B82F6"))
+                      }
+                  }
+                  updateStatusBadgeText()
+                  desktopColumn.addView(statusBadge, LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.WRAP_CONTENT,
+                      ViewGroup.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = dp(10) })
+
+                  // Ruční přepínač DPI pro případ potřeby
                   val dpiBtn = Button(this).apply {
-                      text = "🖥️ Přepnout PC rozlišení\n(Zmenšit na 700 dp pro TV)"
+                      text = "🖥️ Ručně přepnout DPI (220 / Mobil)"
                       setTextColor(Color.WHITE)
                       textSize = 11f
                       background = GradientDrawable().apply {
@@ -163,16 +186,23 @@ jobs:
                           cornerRadius = dp(8).toFloat()
                       }
                       setPadding(dp(12), dp(8), dp(12), dp(8))
-                      setOnClickListener { toggleSystemPcResolution() }
+                      setOnClickListener {
+                          val currentForced = Settings.Secure.getString(contentResolver, "display_density_forced")
+                          if (currentForced == "220") {
+                              restoreNormalResolution()
+                          } else {
+                              enablePcResolutionAutomatically(showToastOnFail = true)
+                          }
+                          updateStatusBadgeText()
+                      }
                   }
                   desktopColumn.addView(dpiBtn, LinearLayout.LayoutParams(
                       ViewGroup.LayoutParams.WRAP_CONTENT,
                       ViewGroup.LayoutParams.WRAP_CONTENT
                   ).apply { bottomMargin = dp(10) })
 
-                  // Tlačítko 2: Rychlý vstup do Vývojářských možností (Minimální šířka)
                   val devBtn = Button(this).apply {
-                      text = "⚙ Vývojářské možnosti\n(Nastavit 'Minimální šířka' na 700)"
+                      text = "⚙ Vývojářské možnosti"
                       setTextColor(Color.WHITE)
                       textSize = 11f
                       background = GradientDrawable().apply {
@@ -183,11 +213,6 @@ jobs:
                       setOnClickListener {
                           try {
                               startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-                              Toast.makeText(
-                                  this@MainActivity,
-                                  "Najdi 'Minimální šířka' a změň číslo na 700 (po skončení vrať na 411)",
-                                  Toast.LENGTH_LONG
-                              ).show()
                           } catch (_: Exception) {
                               startActivity(Intent(Settings.ACTION_SETTINGS))
                           }
@@ -204,12 +229,10 @@ jobs:
                       Gravity.TOP or Gravity.START
                   ))
 
-                  // Informační text uprostřed plochy
-                  val currentSw = resources.configuration.smallestScreenWidthDp
                   val watermark = TextView(this).apply {
-                      text = "Android Desktop OS v1.0.3 (PC Resolution Edition)\n" +
-                             "Aktuální šířka systému: ${currentSw} dp (pro plovoucí okna nastav >= 600 dp)\n" +
-                             "Klikni na ⊞ Start pro otevření aplikací v okně"
+                      text = "Android Desktop OS v1.0.4 (Auto-DPI)\n" +
+                             "Klikni na ⊞ Start pro otevření aplikací v plovoucím okně\n" +
+                             "Tlačítko '⏻ Ukončit PC' vrátí telefon do normálního rozlišení"
                       setTextColor(Color.parseColor("#64748B"))
                       textSize = 15f
                       gravity = Gravity.CENTER
@@ -221,7 +244,6 @@ jobs:
                       Gravity.CENTER
                   ))
 
-                  // Nabídka START (7 sloupců díky PC měřítku)
                   startMenu = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       visibility = View.GONE
@@ -234,7 +256,7 @@ jobs:
                   }
 
                   val startTitle = TextView(this).apply {
-                      text = "Aplikace (v režimu >= 600 dp se otevírají v plovoucích PC oknech)"
+                      text = "Všechny aplikace (kliknutím otevřeš v PC okně)"
                       setTextColor(Color.WHITE)
                       textSize = 12f
                       setTypeface(null, Typeface.BOLD)
@@ -288,7 +310,6 @@ jobs:
                   }
                   root.addView(startMenu, startParams)
 
-                  // SPODNÍ LIŠTA (TASKBAR)
                   val taskbar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -350,38 +371,47 @@ jobs:
                   setContentView(root)
               }
 
-              // Pokus o automatické přepnutí systémového DPI (pokud má aplikace WRITE_SECURE_SETTINGS)
-              private fun toggleSystemPcResolution() {
-                  try {
-                      if (!isPcDpiActive) {
-                          Settings.Secure.putString(contentResolver, "display_density_forced", "220")
-                          isPcDpiActive = true
-                          Toast.makeText(this, "PC rozlišení (220 DPI) zapnuto!", Toast.LENGTH_SHORT).show()
-                      } else {
-                          Settings.Secure.putString(contentResolver, "display_density_forced", null)
-                          isPcDpiActive = false
-                          Toast.makeText(this, "Původní mobilní rozlišení obnoveno!", Toast.LENGTH_SHORT).show()
-                      }
-                  } catch (_: SecurityException) {
-                      Toast.makeText(
-                          this,
-                          "Otevírám Vývojářské možnosti -> změň položku 'Minimální šířka' na 700!",
-                          Toast.LENGTH_LONG
-                      ).show()
-                      try {
-                          startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-                      } catch (_: Exception) {}
+              private fun updateStatusBadgeText() {
+                  val forced = try {
+                      Settings.Secure.getString(contentResolver, "display_density_forced")
+                  } catch (_: Exception) { null }
+
+                  statusBadge.text = if (forced == "220") {
+                      "🟢 Automatické PC rozlišení: AKTIVNÍ (220 DPI)"
+                  } else {
+                      "🟠 PC rozlišení neaktivní (povol WRITE_SECURE_SETTINGS přes Shizuku)"
                   }
               }
 
-              private fun exitToNormalPhone() {
-                  // Pokud bylo automaticky přepnuté DPI, vrátíme ho zpět na normální telefon
+              private fun enablePcResolutionAutomatically(showToastOnFail: Boolean = false) {
+                  isPcSessionActive = true
                   try {
-                      if (isPcDpiActive) {
-                          Settings.Secure.putString(contentResolver, "display_density_forced", null)
+                      val currentForced = Settings.Secure.getString(contentResolver, "display_density_forced")
+                      if (currentForced != "220") {
+                          Settings.Secure.putString(contentResolver, "display_density_forced", "220")
+                          Toast.makeText(this, "PC režim zapnut (220 DPI)", Toast.LENGTH_SHORT).show()
                       }
-                  } catch (_: Exception) {}
+                  } catch (_: SecurityException) {
+                      if (showToastOnFail) {
+                          Toast.makeText(
+                              this,
+                              "Chybí oprávnění! Spusť v aShell příkaz: pm grant com.pclauncher android.permission.WRITE_SECURE_SETTINGS",
+                              Toast.LENGTH_LONG
+                          ).show()
+                      }
+                  }
+              }
 
+              private fun restoreNormalResolution() {
+                  isPcSessionActive = false
+                  try {
+                      Settings.Secure.putString(contentResolver, "display_density_forced", null)
+                      Toast.makeText(this, "Mobilní rozlišení obnoveno", Toast.LENGTH_SHORT).show()
+                  } catch (_: Exception) {}
+              }
+
+              private fun exitToNormalPhone() {
+                  restoreNormalResolution()
                   val samsungHome = packageManager.getLaunchIntentForPackage("com.sec.android.app.launcher")
                   if (samsungHome != null) {
                       startActivity(samsungHome)
@@ -389,9 +419,20 @@ jobs:
                   finish()
               }
 
+              override fun onDestroy() {
+                  super.onDestroy()
+                  // Pokud uživatel aplikaci skutečně ukončil (nejen překreslení obrazovky), vrátíme rozlišení
+                  if (isFinishing) {
+                      restoreNormalResolution()
+                  }
+              }
+
               override fun onWindowFocusChanged(hasFocus: Boolean) {
                   super.onWindowFocusChanged(hasFocus)
-                  if (hasFocus) hideSystemBars()
+                  if (hasFocus) {
+                      hideSystemBars()
+                      if (::statusBadge.isInitialized) updateStatusBadgeText()
+                  }
               }
 
               @Suppress("DEPRECATION")
