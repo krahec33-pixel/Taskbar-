@@ -57,9 +57,9 @@ jobs:
               defaultConfig {
                   applicationId "com.pclauncher"
                   minSdk 26
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  targetSdk 28
+                  versionCode 3
+                  versionName "1.0.3"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -74,9 +74,12 @@ jobs:
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+              <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+
               <application
                   android:label="PC Rozhraní"
                   android:icon="@android:drawable/sym_def_app_icon"
+                  android:resizeableActivity="true"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
                   <activity
                       android:name=".MainActivity"
@@ -84,10 +87,12 @@ jobs:
                       android:launchMode="singleTask"
                       android:resizeableActivity="true"
                       android:screenOrientation="sensorLandscape"
-                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      android:configChanges="orientation|screenSize|smallestScreenSize|density|keyboardHidden">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
                       </intent-filter>
                   </activity>
               </application>
@@ -99,7 +104,10 @@ jobs:
 
           import android.app.Activity
           import android.app.ActivityOptions
+          import android.content.ComponentName
+          import android.content.Context
           import android.content.Intent
+          import android.content.res.Configuration
           import android.graphics.Color
           import android.graphics.Rect
           import android.graphics.Typeface
@@ -113,13 +121,23 @@ jobs:
           import android.view.ViewGroup
           import android.widget.*
 
-          data class AppItem(val label: String, val pkg: String, val icon: Drawable)
+          data class AppItem(val label: String, val pkg: String, val activityName: String, val icon: Drawable)
 
           class MainActivity : Activity() {
 
               private lateinit var startMenu: LinearLayout
               private lateinit var runningTasksBar: LinearLayout
               private val recentApps = mutableListOf<AppItem>()
+              private var isPcDpiActive = false
+
+              // Vynucení PC měřítka (jemného rozlišení) přímo pro samotný Launcher
+              override fun attachBaseContext(newBase: Context) {
+                  val config = Configuration(newBase.resources.configuration)
+                  config.densityDpi = 220 // Jemné PC měřítko (na mobilu malé, na TV ideální)
+                  config.fontScale = 0.85f
+                  val context = newBase.createConfigurationContext(config)
+                  super.attachBaseContext(context)
+              }
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -129,23 +147,47 @@ jobs:
                       setBackgroundColor(Color.parseColor("#0F172A"))
                   }
 
+                  // Levý sloupec s ovládáním rozlišení a oken
                   val desktopColumn = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(dp(20), dp(20), dp(20), dp(20))
+                      setPadding(dp(16), dp(16), dp(16), dp(16))
                   }
 
+                  // Tlačítko 1: Přepínač PC rozlišení (DPI)
+                  val dpiBtn = Button(this).apply {
+                      text = "🖥️ Přepnout PC rozlišení\n(Zmenšit na 700 dp pro TV)"
+                      setTextColor(Color.WHITE)
+                      textSize = 11f
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#059669"))
+                          cornerRadius = dp(8).toFloat()
+                      }
+                      setPadding(dp(12), dp(8), dp(12), dp(8))
+                      setOnClickListener { toggleSystemPcResolution() }
+                  }
+                  desktopColumn.addView(dpiBtn, LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.WRAP_CONTENT,
+                      ViewGroup.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = dp(10) })
+
+                  // Tlačítko 2: Rychlý vstup do Vývojářských možností (Minimální šířka)
                   val devBtn = Button(this).apply {
-                      text = "⚙ Nastavení oken\n(Vývojářské možnosti)"
+                      text = "⚙ Vývojářské možnosti\n(Nastavit 'Minimální šířka' na 700)"
                       setTextColor(Color.WHITE)
                       textSize = 11f
                       background = GradientDrawable().apply {
                           setColor(Color.parseColor("#334155"))
-                          cornerRadius = dp(10).toFloat()
+                          cornerRadius = dp(8).toFloat()
                       }
-                      setPadding(dp(12), dp(10), dp(12), dp(10))
+                      setPadding(dp(12), dp(8), dp(12), dp(8))
                       setOnClickListener {
                           try {
                               startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  "Najdi 'Minimální šířka' a změň číslo na 700 (po skončení vrať na 411)",
+                                  Toast.LENGTH_LONG
+                              ).show()
                           } catch (_: Exception) {
                               startActivity(Intent(Settings.ACTION_SETTINGS))
                           }
@@ -155,16 +197,21 @@ jobs:
                       ViewGroup.LayoutParams.WRAP_CONTENT,
                       ViewGroup.LayoutParams.WRAP_CONTENT
                   ))
+
                   root.addView(desktopColumn, FrameLayout.LayoutParams(
                       ViewGroup.LayoutParams.WRAP_CONTENT,
                       ViewGroup.LayoutParams.WRAP_CONTENT,
                       Gravity.TOP or Gravity.START
                   ))
 
+                  // Informační text uprostřed plochy
+                  val currentSw = resources.configuration.smallestScreenWidthDp
                   val watermark = TextView(this).apply {
-                      text = "Android Desktop OS\nKlikni na ⊞ Start pro otevření aplikací v plovoucím okně"
-                      setTextColor(Color.parseColor("#475569"))
-                      textSize = 20f
+                      text = "Android Desktop OS v1.0.3 (PC Resolution Edition)\n" +
+                             "Aktuální šířka systému: ${currentSw} dp (pro plovoucí okna nastav >= 600 dp)\n" +
+                             "Klikni na ⊞ Start pro otevření aplikací v okně"
+                      setTextColor(Color.parseColor("#64748B"))
+                      textSize = 15f
                       gravity = Gravity.CENTER
                       setTypeface(null, Typeface.BOLD)
                   }
@@ -174,31 +221,32 @@ jobs:
                       Gravity.CENTER
                   ))
 
+                  // Nabídka START (7 sloupců díky PC měřítku)
                   startMenu = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       visibility = View.GONE
                       background = GradientDrawable().apply {
                           setColor(Color.parseColor("#F21E293B"))
-                          cornerRadius = dp(12).toFloat()
+                          cornerRadius = dp(10).toFloat()
                           setStroke(dp(1), Color.parseColor("#475569"))
                       }
-                      setPadding(dp(16), dp(16), dp(16), dp(16))
+                      setPadding(dp(14), dp(14), dp(14), dp(14))
                   }
 
                   val startTitle = TextView(this).apply {
-                      text = "Všechny aplikace (kliknutím otevřeš v okně)"
+                      text = "Aplikace (v režimu >= 600 dp se otevírají v plovoucích PC oknech)"
                       setTextColor(Color.WHITE)
-                      textSize = 14f
+                      textSize = 12f
                       setTypeface(null, Typeface.BOLD)
-                      setPadding(0, 0, 0, dp(12))
+                      setPadding(0, 0, 0, dp(10))
                   }
                   startMenu.addView(startTitle)
 
                   val apps = loadApps()
                   val grid = GridView(this).apply {
-                      numColumns = 5
-                      verticalSpacing = dp(12)
-                      horizontalSpacing = dp(12)
+                      numColumns = 7
+                      verticalSpacing = dp(10)
+                      horizontalSpacing = dp(10)
                       adapter = object : BaseAdapter() {
                           override fun getCount() = apps.size
                           override fun getItem(p: Int) = apps[p]
@@ -208,15 +256,15 @@ jobs:
                               return LinearLayout(this@MainActivity).apply {
                                   orientation = LinearLayout.VERTICAL
                                   gravity = Gravity.CENTER
-                                  setPadding(dp(6), dp(6), dp(6), dp(6))
+                                  setPadding(dp(4), dp(4), dp(4), dp(4))
                                   addView(ImageView(this@MainActivity).apply {
                                       setImageDrawable(app.icon)
-                                      layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+                                      layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
                                   })
                                   addView(TextView(this@MainActivity).apply {
                                       text = app.label
                                       setTextColor(Color.WHITE)
-                                      textSize = 11f
+                                      textSize = 10f
                                       maxLines = 1
                                       ellipsize = TextUtils.TruncateAt.END
                                       gravity = Gravity.CENTER
@@ -234,71 +282,111 @@ jobs:
                       ViewGroup.LayoutParams.MATCH_PARENT
                   ))
 
-                  val startParams = FrameLayout.LayoutParams(dp(560), dp(360), Gravity.BOTTOM or Gravity.START).apply {
-                      leftMargin = dp(12)
-                      bottomMargin = dp(58)
+                  val startParams = FrameLayout.LayoutParams(dp(640), dp(380), Gravity.BOTTOM or Gravity.START).apply {
+                      leftMargin = dp(10)
+                      bottomMargin = dp(48)
                   }
                   root.addView(startMenu, startParams)
 
+                  // SPODNÍ LIŠTA (TASKBAR)
                   val taskbar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       setBackgroundColor(Color.parseColor("#E6090D16"))
-                      setPadding(dp(10), dp(6), dp(10), dp(6))
+                      setPadding(dp(8), dp(4), dp(8), dp(4))
                   }
 
                   val startBtn = Button(this).apply {
                       text = "⊞ Start"
                       setTextColor(Color.WHITE)
-                      textSize = 13f
+                      textSize = 12f
                       setTypeface(null, Typeface.BOLD)
                       background = GradientDrawable().apply {
                           setColor(Color.parseColor("#2563EB"))
-                          cornerRadius = dp(8).toFloat()
+                          cornerRadius = dp(6).toFloat()
                       }
-                      setPadding(dp(16), 0, dp(16), 0)
+                      setPadding(dp(14), 0, dp(14), 0)
                       setOnClickListener {
                           startMenu.visibility = if (startMenu.visibility == View.VISIBLE) View.GONE else View.VISIBLE
                       }
                   }
-                  taskbar.addView(startBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)))
+                  taskbar.addView(startBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)))
 
                   runningTasksBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
-                      setPadding(dp(12), 0, dp(12), 0)
+                      setPadding(dp(10), 0, dp(10), 0)
                   }
                   taskbar.addView(runningTasksBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
 
                   val clock = TextClock(this).apply {
                       format24Hour = "HH:mm  |  dd.MM."
                       setTextColor(Color.WHITE)
-                      textSize = 13f
-                      setPadding(dp(12), 0, dp(12), 0)
+                      textSize = 12f
+                      setPadding(dp(10), 0, dp(10), 0)
                   }
                   taskbar.addView(clock)
 
                   val exitBtn = Button(this).apply {
-                      text = "⏻ Ukončit PC"
+                      text = "⏻ Ukončit PC (Vrátit mobil)"
                       setTextColor(Color.WHITE)
-                      textSize = 12f
+                      textSize = 11f
                       background = GradientDrawable().apply {
                           setColor(Color.parseColor("#DC2626"))
-                          cornerRadius = dp(8).toFloat()
+                          cornerRadius = dp(6).toFloat()
                       }
-                      setPadding(dp(12), 0, dp(12), 0)
-                      setOnClickListener { finish() }
+                      setPadding(dp(10), 0, dp(10), 0)
+                      setOnClickListener { exitToNormalPhone() }
                   }
-                  taskbar.addView(exitBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)))
+                  taskbar.addView(exitBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)))
 
                   root.addView(taskbar, FrameLayout.LayoutParams(
                       ViewGroup.LayoutParams.MATCH_PARENT,
-                      dp(50),
+                      dp(42),
                       Gravity.BOTTOM
                   ))
 
                   root.setOnClickListener { startMenu.visibility = View.GONE }
                   setContentView(root)
+              }
+
+              // Pokus o automatické přepnutí systémového DPI (pokud má aplikace WRITE_SECURE_SETTINGS)
+              private fun toggleSystemPcResolution() {
+                  try {
+                      if (!isPcDpiActive) {
+                          Settings.Secure.putString(contentResolver, "display_density_forced", "220")
+                          isPcDpiActive = true
+                          Toast.makeText(this, "PC rozlišení (220 DPI) zapnuto!", Toast.LENGTH_SHORT).show()
+                      } else {
+                          Settings.Secure.putString(contentResolver, "display_density_forced", null)
+                          isPcDpiActive = false
+                          Toast.makeText(this, "Původní mobilní rozlišení obnoveno!", Toast.LENGTH_SHORT).show()
+                      }
+                  } catch (_: SecurityException) {
+                      Toast.makeText(
+                          this,
+                          "Otevírám Vývojářské možnosti -> změň položku 'Minimální šířka' na 700!",
+                          Toast.LENGTH_LONG
+                      ).show()
+                      try {
+                          startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                      } catch (_: Exception) {}
+                  }
+              }
+
+              private fun exitToNormalPhone() {
+                  // Pokud bylo automaticky přepnuté DPI, vrátíme ho zpět na normální telefon
+                  try {
+                      if (isPcDpiActive) {
+                          Settings.Secure.putString(contentResolver, "display_density_forced", null)
+                      }
+                  } catch (_: Exception) {}
+
+                  val samsungHome = packageManager.getLaunchIntentForPackage("com.sec.android.app.launcher")
+                  if (samsungHome != null) {
+                      startActivity(samsungHome)
+                  }
+                  finish()
               }
 
               override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -325,33 +413,57 @@ jobs:
                   }
                   return pm.queryIntentActivities(intent, 0).mapNotNull { info ->
                       val pkg = info.activityInfo.packageName
-                      if (pkg == packageName) return@mapNotNull null
-                      AppItem(info.loadLabel(pm).toString(), pkg, info.loadIcon(pm))
+                      val actName = info.activityInfo.name
+                      if (pkg == packageName || pkg == "com.sec.android.app.launcher") return@mapNotNull null
+                      AppItem(info.loadLabel(pm).toString(), pkg, actName, info.loadIcon(pm))
                   }.sortedBy { it.label.lowercase() }
               }
 
               private fun launchFreeform(app: AppItem) {
-                  val intent = packageManager.getLaunchIntentForPackage(app.pkg) ?: return
-                  intent.addFlags(
-                      Intent.FLAG_ACTIVITY_NEW_TASK or
-                      Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-                      Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                  val intent = Intent(Intent.ACTION_MAIN).apply {
+                      addCategory(Intent.CATEGORY_LAUNCHER)
+                      component = ComponentName(app.pkg, app.activityName)
+                      addFlags(
+                          Intent.FLAG_ACTIVITY_NEW_TASK or
+                          Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                          Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                      )
+                  }
+
+                  val dm = resources.displayMetrics
+                  val w = dm.widthPixels
+                  val h = dm.heightPixels
+                  val offset = (recentApps.size % 5) * dp(22)
+                  val bounds = Rect(
+                      (w * 0.10f).toInt() + offset,
+                      (h * 0.06f).toInt() + offset,
+                      (w * 0.72f).toInt() + offset,
+                      (h * 0.82f).toInt() + offset
                   )
+
                   val options = ActivityOptions.makeBasic()
+                  options.launchBounds = bounds
+
                   try {
                       val m = ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
                       m.invoke(options, 5)
                   } catch (_: Exception) {}
 
-                  options.launchBounds = Rect(140, 80, 1100, 720)
-                  startActivity(intent, options.toBundle())
+                  val bundle = options.toBundle()
+                  bundle.putInt("android.activity.launchWindowingMode", 5)
+
+                  try {
+                      startActivity(intent, bundle)
+                  } catch (e: Exception) {
+                      Toast.makeText(this, "Chyba: ${e.message}", Toast.LENGTH_SHORT).show()
+                  }
 
                   if (recentApps.none { it.pkg == app.pkg }) {
                       recentApps.add(app)
                       val iconBtn = ImageView(this).apply {
                           setImageDrawable(app.icon)
-                          setPadding(dp(6), dp(4), dp(6), dp(4))
-                          layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { rightMargin = dp(6) }
+                          setPadding(dp(4), dp(4), dp(4), dp(4))
+                          layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply { rightMargin = dp(6) }
                           setOnClickListener { launchFreeform(app) }
                       }
                       runningTasksBar.addView(iconBtn)
@@ -375,12 +487,6 @@ jobs:
 
       - name: Zkompilovat APK
         run: gradle assembleDebug
-
-      - name: Ulozit APK do Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: PC-Rozhrani-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Vystavit APK primo v Releases
         uses: softprops/action-gh-release@v2
