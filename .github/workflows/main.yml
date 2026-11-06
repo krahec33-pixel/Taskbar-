@@ -58,8 +58,8 @@ jobs:
                   applicationId "com.pclauncher"
                   minSdk 26
                   targetSdk 28
-                  versionCode 4
-                  versionName "1.0.4"
+                  versionCode 5
+                  versionName "1.0.5"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -68,6 +68,9 @@ jobs:
               kotlinOptions {
                   jvmTarget = '17'
               }
+          }
+          dependencies {
+              implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
           }
           EOF
 
@@ -105,29 +108,30 @@ jobs:
           import android.app.Activity
           import android.app.ActivityOptions
           import android.content.ComponentName
-          import android.content.Context
           import android.content.Intent
-          import android.content.res.Configuration
           import android.graphics.Color
           import android.graphics.Rect
           import android.graphics.Typeface
           import android.graphics.drawable.Drawable
           import android.graphics.drawable.GradientDrawable
+          import android.os.Build
           import android.os.Bundle
+          import android.os.Process
           import android.provider.Settings
           import android.text.TextUtils
           import android.view.Gravity
           import android.view.View
           import android.view.ViewGroup
           import android.widget.*
+          import org.lsposed.hiddenapibypass.HiddenApiBypass
 
           data class AppItem(val label: String, val pkg: String, val activityName: String, val icon: Drawable)
 
           class MainActivity : Activity() {
 
               companion object {
-                  // Drží stav PC režimu i při překreslení obrazovky po změně DPI
                   var isPcSessionActive = false
+                  var targetPcDpi = 220
               }
 
               private lateinit var startMenu: LinearLayout
@@ -135,31 +139,36 @@ jobs:
               private lateinit var statusBadge: TextView
               private val recentApps = mutableListOf<AppItem>()
 
-              override fun attachBaseContext(newBase: Context) {
-                  val config = Configuration(newBase.resources.configuration)
-                  config.densityDpi = 220
-                  config.fontScale = 0.85f
-                  val context = newBase.createConfigurationContext(config)
-                  super.attachBaseContext(context)
-              }
-
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
+
+                  // Odemknutí skrytých systémových metod Androidu (IWindowManager + Freeform)
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      try {
+                          HiddenApiBypass.addHiddenApiExemptions("L")
+                      } catch (_: Throwable) {}
+                  }
+
                   hideSystemBars()
 
-                  // 1. AUTOMATICKÉ ZAPNUTÍ PC ROZLIŠENÍ PŘI STARTU APLIKACE
-                  enablePcResolutionAutomatically()
+                  // Okamžité přepnutí globálního rozlišení pro VŠECHNY aplikace
+                  if (!isPcSessionActive) {
+                      applyGlobalDensity(targetPcDpi)
+                  }
 
+                  buildDesktopUi()
+              }
+
+              private fun buildDesktopUi() {
                   val root = FrameLayout(this).apply {
                       setBackgroundColor(Color.parseColor("#0F172A"))
                   }
 
                   val desktopColumn = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(dp(16), dp(16), dp(16), dp(16))
+                      setPadding(dp(14), dp(14), dp(14), dp(14))
                   }
 
-                  // Indikátor stavu oprávnění a rozlišení
                   statusBadge = TextView(this).apply {
                       textSize = 11f
                       setTextColor(Color.WHITE)
@@ -176,27 +185,38 @@ jobs:
                       ViewGroup.LayoutParams.WRAP_CONTENT
                   ).apply { bottomMargin = dp(10) })
 
-                  // Ruční přepínač DPI pro případ potřeby
-                  val dpiBtn = Button(this).apply {
-                      text = "🖥️ Ručně přepnout DPI (220 / Mobil)"
-                      setTextColor(Color.WHITE)
-                      textSize = 11f
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#059669"))
-                          cornerRadius = dp(8).toFloat()
-                      }
-                      setPadding(dp(12), dp(8), dp(12), dp(8))
-                      setOnClickListener {
-                          val currentForced = Settings.Secure.getString(contentResolver, "display_density_forced")
-                          if (currentForced == "220") {
-                              restoreNormalResolution()
-                          } else {
-                              enablePcResolutionAutomatically(showToastOnFail = true)
-                          }
-                          updateStatusBadgeText()
-                      }
+                  // Volič měřítka pro všechny aplikace v oknech
+                  val scaleRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
                   }
-                  desktopColumn.addView(dpiBtn, LinearLayout.LayoutParams(
+
+                  listOf(
+                      180 to "🖥️ 180 DPI (Extra malé)",
+                      220 to "🖥️ 220 DPI (PC Standard)",
+                      260 to "🖥️ 260 DPI (Větší)"
+                  ).forEach { (dpiVal, title) ->
+                      val btn = Button(this).apply {
+                          text = title
+                          setTextColor(Color.WHITE)
+                          textSize = 10f
+                          background = GradientDrawable().apply {
+                              setColor(if (targetPcDpi == dpiVal) Color.parseColor("#2563EB") else Color.parseColor("#334155"))
+                              cornerRadius = dp(6).toFloat()
+                          }
+                          setPadding(dp(10), dp(6), dp(10), dp(6))
+                          setOnClickListener {
+                              targetPcDpi = dpiVal
+                              applyGlobalDensity(dpiVal, showToast = true)
+                              recreate()
+                          }
+                      }
+                      scaleRow.addView(btn, LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      ).apply { rightMargin = dp(6) })
+                  }
+
+                  desktopColumn.addView(scaleRow, LinearLayout.LayoutParams(
                       ViewGroup.LayoutParams.WRAP_CONTENT,
                       ViewGroup.LayoutParams.WRAP_CONTENT
                   ).apply { bottomMargin = dp(10) })
@@ -204,12 +224,12 @@ jobs:
                   val devBtn = Button(this).apply {
                       text = "⚙ Vývojářské možnosti"
                       setTextColor(Color.WHITE)
-                      textSize = 11f
+                      textSize = 10f
                       background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#334155"))
-                          cornerRadius = dp(8).toFloat()
+                          setColor(Color.parseColor("#475569"))
+                          cornerRadius = dp(6).toFloat()
                       }
-                      setPadding(dp(12), dp(8), dp(12), dp(8))
+                      setPadding(dp(10), dp(6), dp(10), dp(6))
                       setOnClickListener {
                           try {
                               startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
@@ -230,11 +250,11 @@ jobs:
                   ))
 
                   val watermark = TextView(this).apply {
-                      text = "Android Desktop OS v1.0.4 (Auto-DPI)\n" +
-                             "Klikni na ⊞ Start pro otevření aplikací v plovoucím okně\n" +
-                             "Tlačítko '⏻ Ukončit PC' vrátí telefon do normálního rozlišení"
+                      text = "Android Desktop OS v1.0.5 (Global Window Scaling)\n" +
+                             "Všechny otevírané aplikace nyní běží v jemné PC hustotě (${targetPcDpi} DPI)\n" +
+                             "Klikni na ⊞ Start pro otevření aplikace v plovoucím okně"
                       setTextColor(Color.parseColor("#64748B"))
-                      textSize = 15f
+                      textSize = 14f
                       gravity = Gravity.CENTER
                       setTypeface(null, Typeface.BOLD)
                   }
@@ -256,7 +276,7 @@ jobs:
                   }
 
                   val startTitle = TextView(this).apply {
-                      text = "Všechny aplikace (kliknutím otevřeš v PC okně)"
+                      text = "Aplikace (otevírají se v PC měřítku a plovoucím okně)"
                       setTextColor(Color.WHITE)
                       textSize = 12f
                       setTypeface(null, Typeface.BOLD)
@@ -266,7 +286,7 @@ jobs:
 
                   val apps = loadApps()
                   val grid = GridView(this).apply {
-                      numColumns = 7
+                      numColumns = 6
                       verticalSpacing = dp(10)
                       horizontalSpacing = dp(10)
                       adapter = object : BaseAdapter() {
@@ -293,7 +313,7 @@ jobs:
                                   })
                                   setOnClickListener {
                                       startMenu.visibility = View.GONE
-                                      launchFreeform(app)
+                                      launchFreeform(app, forceFreshDpi = true)
                                   }
                               }
                           }
@@ -304,7 +324,7 @@ jobs:
                       ViewGroup.LayoutParams.MATCH_PARENT
                   ))
 
-                  val startParams = FrameLayout.LayoutParams(dp(640), dp(380), Gravity.BOTTOM or Gravity.START).apply {
+                  val startParams = FrameLayout.LayoutParams(dp(620), dp(360), Gravity.BOTTOM or Gravity.START).apply {
                       leftMargin = dp(10)
                       bottomMargin = dp(48)
                   }
@@ -372,32 +392,51 @@ jobs:
               }
 
               private fun updateStatusBadgeText() {
-                  val forced = try {
-                      Settings.Secure.getString(contentResolver, "display_density_forced")
-                  } catch (_: Exception) { null }
-
-                  statusBadge.text = if (forced == "220") {
-                      "🟢 Automatické PC rozlišení: AKTIVNÍ (220 DPI)"
+                  val actualSw = resources.configuration.smallestScreenWidthDp
+                  val actualDpi = resources.displayMetrics.densityDpi
+                  statusBadge.text = if (actualSw >= 600) {
+                      "🟢 Globální PC rozlišení AKTIVNÍ: ${actualDpi} DPI (šířka ${actualSw} dp - okna jsou zmenšená)"
                   } else {
-                      "🟠 PC rozlišení neaktivní (povol WRITE_SECURE_SETTINGS přes Shizuku)"
+                      "🟠 Systém stále běží v mobilním rozlišení (${actualDpi} DPI / ${actualSw} dp)"
                   }
               }
 
-              private fun enablePcResolutionAutomatically(showToastOnFail: Boolean = false) {
+              // Skutečná změna DPI přes WindowManagerService pro všechny aplikace v oknech
+              private fun applyGlobalDensity(dpi: Int, showToast: Boolean = false) {
                   isPcSessionActive = true
                   try {
-                      val currentForced = Settings.Secure.getString(contentResolver, "display_density_forced")
-                      if (currentForced != "220") {
-                          Settings.Secure.putString(contentResolver, "display_density_forced", "220")
-                          Toast.makeText(this, "PC režim zapnut (220 DPI)", Toast.LENGTH_SHORT).show()
+                      Settings.Secure.putString(contentResolver, "display_density_forced", dpi.toString())
+
+                      val wmClass = Class.forName("android.view.WindowManagerGlobal")
+                      val getWmService = wmClass.getDeclaredMethod("getWindowManagerService")
+                      getWmService.isAccessible = true
+                      val iWm = getWmService.invoke(null)
+
+                      if (iWm != null) {
+                          val userId = Process.myUid() / 100000
+                          try {
+                              val m = iWm.javaClass.getMethod(
+                                  "setForcedDisplayDensityForUser",
+                                  Int::class.javaPrimitiveType,
+                                  Int::class.javaPrimitiveType,
+                                  Int::class.javaPrimitiveType
+                              )
+                              m.invoke(iWm, 0, dpi, userId)
+                          } catch (_: NoSuchMethodException) {
+                              val mAlt = iWm.javaClass.getMethod(
+                                  "setForcedDisplayDensity",
+                                  Int::class.javaPrimitiveType,
+                                  Int::class.javaPrimitiveType
+                              )
+                              mAlt.invoke(iWm, 0, dpi)
+                          }
                       }
-                  } catch (_: SecurityException) {
-                      if (showToastOnFail) {
-                          Toast.makeText(
-                              this,
-                              "Chybí oprávnění! Spusť v aShell příkaz: pm grant com.pclauncher android.permission.WRITE_SECURE_SETTINGS",
-                              Toast.LENGTH_LONG
-                          ).show()
+                      if (showToast) {
+                          Toast.makeText(this, "Rozlišení všech aplikací nastaveno na $dpi DPI", Toast.LENGTH_SHORT).show()
+                      }
+                  } catch (e: Exception) {
+                      if (showToast) {
+                          Toast.makeText(this, "Chyba změny DPI: ${e.message}", Toast.LENGTH_LONG).show()
                       }
                   }
               }
@@ -406,7 +445,29 @@ jobs:
                   isPcSessionActive = false
                   try {
                       Settings.Secure.putString(contentResolver, "display_density_forced", null)
-                      Toast.makeText(this, "Mobilní rozlišení obnoveno", Toast.LENGTH_SHORT).show()
+
+                      val wmClass = Class.forName("android.view.WindowManagerGlobal")
+                      val getWmService = wmClass.getDeclaredMethod("getWindowManagerService")
+                      getWmService.isAccessible = true
+                      val iWm = getWmService.invoke(null)
+
+                      if (iWm != null) {
+                          val userId = Process.myUid() / 100000
+                          try {
+                              val m = iWm.javaClass.getMethod(
+                                  "clearForcedDisplayDensityForUser",
+                                  Int::class.javaPrimitiveType,
+                                  Int::class.javaPrimitiveType
+                              )
+                              m.invoke(iWm, 0, userId)
+                          } catch (_: NoSuchMethodException) {
+                              val mAlt = iWm.javaClass.getMethod(
+                                  "clearForcedDisplayDensity",
+                                  Int::class.javaPrimitiveType
+                              )
+                              mAlt.invoke(iWm, 0)
+                          }
+                      }
                   } catch (_: Exception) {}
               }
 
@@ -419,9 +480,13 @@ jobs:
                   finish()
               }
 
+              override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  buildDesktopUi()
+              }
+
               override fun onDestroy() {
                   super.onDestroy()
-                  // Pokud uživatel aplikaci skutečně ukončil (nejen překreslení obrazovky), vrátíme rozlišení
                   if (isFinishing) {
                       restoreNormalResolution()
                   }
@@ -460,15 +525,14 @@ jobs:
                   }.sortedBy { it.label.lowercase() }
               }
 
-              private fun launchFreeform(app: AppItem) {
+              private fun launchFreeform(app: AppItem, forceFreshDpi: Boolean) {
                   val intent = Intent(Intent.ACTION_MAIN).apply {
                       addCategory(Intent.CATEGORY_LAUNCHER)
                       component = ComponentName(app.pkg, app.activityName)
-                      addFlags(
-                          Intent.FLAG_ACTIVITY_NEW_TASK or
-                          Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                          Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-                      )
+                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                      if (forceFreshDpi) {
+                          addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                      }
                   }
 
                   val dm = resources.displayMetrics
@@ -478,8 +542,8 @@ jobs:
                   val bounds = Rect(
                       (w * 0.10f).toInt() + offset,
                       (h * 0.06f).toInt() + offset,
-                      (w * 0.72f).toInt() + offset,
-                      (h * 0.82f).toInt() + offset
+                      (w * 0.74f).toInt() + offset,
+                      (h * 0.84f).toInt() + offset
                   )
 
                   val options = ActivityOptions.makeBasic()
@@ -505,7 +569,7 @@ jobs:
                           setImageDrawable(app.icon)
                           setPadding(dp(4), dp(4), dp(4), dp(4))
                           layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply { rightMargin = dp(6) }
-                          setOnClickListener { launchFreeform(app) }
+                          setOnClickListener { launchFreeform(app, forceFreshDpi = false) }
                       }
                       runningTasksBar.addView(iconBtn)
                   }
